@@ -100,3 +100,47 @@ def get_filtered_ads(
     advert = ads_collection.find(query).skip(skip).limit(limit)
     advert = list(advert)
     return {"data": list(map(replace_mongo_id, advert))}
+
+@app.put("/advert/{ad_id}")
+def replace_ad(
+    ad_id: str,
+    title: Annotated[str, Form()],
+    description: Annotated[str, Form()],
+    price: Annotated[float, Form()],
+    category: Annotated[str, Form()],
+    flyer: Annotated[UploadFile, File()],
+):
+    if not ObjectId(ad_id):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSED_ENTITY, "Invalid ID format"
+        )
+    upload_result = cloudinary.uploader.upload(flyer.file)
+
+    # insert Ad into database
+    ads_collection.replace_one(
+        filter={"_id": ObjectId(ad_id)},
+        replacement={
+            "title": title,
+            "description": description,
+            "price": price,
+            "category": category,
+            "flyer": upload_result["secure_url"],
+        },
+    )
+    # return response
+    return {"message": "Ad Updated successfully"}
+
+
+@app.delete("/advert/{ad_id}")
+def delete_ad(ad_id):
+    if not ObjectId.is_valid(ad_id):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid mongo ID"
+        )
+    delete_result = ads_collection.find_one_and_delete({"_id": ObjectId(ad_id)})
+
+    if not delete_result:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid mongo ID"
+        )
+    return {"message": f"advert with id {ad_id} has been deleted successfully"}
