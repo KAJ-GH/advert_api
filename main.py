@@ -71,35 +71,7 @@ def get_ad_by_id(ad_id: str):
         raise HTTPException(status_code=404, detail="Advert not found")
     return {"data": replace_mongo_id(advert)}
 
-@app.get("/advert")
-def get_filtered_ads(
-    title: str = Query("", description="Filter by title"),
-    description: str = Query("", description="Filter by description"),
-    category: str = Query("", description="Filter by category"),
-    min_price: float = Query(None, description="Filter by minimum price"),
-    max_price: float = Query(None, description="Filter by maximum price"),
-    limit: int = 10,
-    skip: int = 0,
-):
-    query = {}
-    if title:
-        query["title"] = {"$regex": title, "$options": "i"}
-    if description:
-        query["description"] = {"$regex": description, "$options": "i"}
-    if category:
-        query["category"] = {"$regex": category, "$options": "i"}
 
-    price_query = {}
-    if min_price is not None:
-        price_query["$gte"] = min_price
-    if max_price is not None:
-        price_query["$lte"] = max_price
-    if price_query:
-        query["price"] = price_query
-
-    advert = ads_collection.find(query).skip(skip).limit(limit)
-    advert = list(advert)
-    return {"data": list(map(replace_mongo_id, advert))}
 
 @app.put("/advert/{ad_id}")
 def replace_ad(
