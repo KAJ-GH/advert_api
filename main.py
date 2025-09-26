@@ -4,6 +4,7 @@ import cloudinary
 from routes.ads import ads_router
 from routes.users import users_router
 from dotenv import load_dotenv
+from routes.gemini import genai_router
 
 
 load_dotenv()
@@ -24,8 +25,8 @@ app = FastAPI()
 def get_home():
     return {"message": "You are on home page"}
 
-#include routes
 
 app.include_router(ads_router)
 app.include_router(users_router)
+app.include_router(genai_router)
 

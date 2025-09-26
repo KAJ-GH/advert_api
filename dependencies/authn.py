@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from db import users_collection
-from utils import replace_mongo_id
+from utils import replace_user_id
 from bson.objectid import ObjectId
 
 
@@ -15,7 +15,7 @@ def is_authenticated(
         payload = jwt.decode(
             jwt=authorization.credentials,
             key=os.getenv("JWT_SECRET_KEY"),
-            algorithms=["JWT_ALOGRITHM"],
+            algorithms=os.getenv("JWT_ALOGRITHM"),
         )
         print(payload)
         return payload["id"]
@@ -30,4 +30,4 @@ def authenticated_user(user_id: Annotated[str, Depends(is_authenticated)]):
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authenticated user missing from database!",
         )
-    return replace_mongo_id(user)
+    return replace_user_id(user)
