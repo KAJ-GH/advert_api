@@ -180,13 +180,6 @@ def delete_ad(ad_id: str, user: Annotated[dict, Depends(authenticated_user)]):
     advert = ads_collection.find_one({"_id": ObjectId(ad_id)})
     if not advert:
         raise HTTPException(status_code=404, detail="Advert not found")
-        
-    if advert["owner_id"] != user["id"]:
-        raise HTTPException(status_code=403, detail="You can only delete your own adverts")
-
-    result = ads_collection.delete_one({"_id": ObjectId(ad_id)})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Advert not found")
     
     return {"message": "Advert deleted successfully"}
 
