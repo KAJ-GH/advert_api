@@ -189,3 +189,6 @@ def delete_ad(ad_id: str, user: Annotated[dict, Depends(authenticated_user)]):
         raise HTTPException(status_code=404, detail="Advert not found")
     
     return {"message": "Advert deleted successfully"}
+
+
+
