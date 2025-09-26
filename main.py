@@ -4,6 +4,7 @@ import cloudinary
 from routes.ads import ads_router
 from routes.users import users_router
 from dotenv import load_dotenv
+from routes.gemini import genai_router
 
 
 load_dotenv()
@@ -28,3 +29,4 @@ def get_home():
 
 app.include_router(ads_router)
 app.include_router(users_router)
+app.include_router(genai_router)

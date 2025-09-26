@@ -1,34 +1,118 @@
-from fastapi import Form, File, UploadFile, status, HTTPException, Query, Depends, APIRouter
+from fastapi import Form, File, status, HTTPException, Depends, APIRouter
 from db import ads_collection
-from pydantic import BaseModel
 from bson.objectid import ObjectId
-from utils import replace_mongo_id
+from utils import genai_client, replace_advert_id
 from typing import Annotated
 import cloudinary
 import cloudinary.uploader
 from dependencies.authn import authenticated_user
 from dependencies.authnz import has_roles
 from routes.users import UserRole
+from google.genai import types
 
 
 # create my router
 ads_router = APIRouter()
+
+@ads_router.get(
+    "/advert",
+    summary="Get all adverts"
+)
+def get_adverts(
+    title="",
+    description="",
+    category="",
+    limit=10,
+    skip=0
+):
+    all_adverts = ads_collection.find(
+        filter={
+            "$or": [
+                {"title": {"$regex": title, "$options": "i"}},
+                {"description": {"$regex": description, "$options": "i"}},
+                {"category": {"$regex": category, "$options": "i"}},
+            ]
+        },
+        limit=int(limit),
+        skip=int(skip),
+    ).to_list()
+    return {"adverts": list(map(replace_advert_id, all_adverts))}
+
+
+@ads_router.get("/advert/{ad_id}", summary="Get advert by ID")
+def get_advert_by_id(ad_id):
+    if not ObjectId.is_valid(ad_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Ad not found")
+    advert = ads_collection.find_one({"_id": ObjectId(ad_id)})
+    return {"data": replace_advert_id(advert)}
+
+
+@ads_router.get("/advert/{ad_id}/related_adverts")
+def get_related_adverts(ad_id, limit=10, skip=0):
+    # Check if advert id is valid
+    if not ObjectId.is_valid(ad_id):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Invalid mongo id received!")
+    # Get all adverts from database by id
+    advert = ads_collection.find_one({"_id": ObjectId(ad_id)})
+    if not advert:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Advert not found!")
+    # Get similar advert in the database
+    similar_adverts = ads_collection.find(
+        filter={
+            "$or": [
+                {"title": {"$regex": advert["title"], "$options": "i"}},
+                {"description": {
+                    "$regex": advert["description"], "$options": "i"}},
+                {"category": {"$regex": advert["category"], "$options": "i"}}
+            ]},
+        limit=int(limit),
+        skip=int(skip)
+    ).to_list()
+    # Return response
+    return {"data": list(map(replace_advert_id, similar_adverts))}
+
+
+
 
 # Post Advert (POST): For vendors to create a new advert
 @ads_router.post("/advert", dependencies=[Depends(has_roles([UserRole.VENDOR]))])
 def post_ad(
     user: Annotated[dict, Depends(authenticated_user)],
     title: Annotated[str, Form()],
-    description: Annotated[str, Form()],
     price: Annotated[float, Form()],
     category: Annotated[str, Form()],
-    flyer: Annotated[UploadFile, File()],
+    description: Annotated[str, Form()] = None,
+    flyer: Annotated[bytes, File()] = None,
 ):
+    
+    advert_count = ads_collection.count_documents(filter={"$and": [
+        {"title": title},
+        {"owner_id": user["id"]}
+    ]})
+    if advert_count > 0:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Advert with title: {title} and owner_id: {user["id"]} already exist!")
+
+    if not flyer:
+        # Generate AI image with Gemini
+        response = genai_client.models.generate_images(
+            model='imagen-4.0-generate-001',
+            prompt=title,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+            )
+        )
+        flyer = response.generated_images[0].image.image_bytes
+    
     # Upload flyer to cloudinary to get a url
-    upload_result = cloudinary.uploader.upload(flyer.file)
+    upload_result = cloudinary.uploader.upload(flyer)
+    
     # Insert event into database
-    ads_collection.insert_one(
-        {
+    
+    we_made_it =    {
             "owner_id": user["id"],
             "title": title,
             "description": description,
@@ -36,63 +120,56 @@ def post_ad(
             "category": category,
             "flyer_url": upload_result["secure_url"],
         }
-    )
-    # Return response
-    return {"message": "Advert added sucessfully"}
+    
+    advert_result = ads_collection.insert_one(we_made_it)
 
-# Get all adverts (GET): Open to all users
-@ads_router.get("/advert")
-def get_all_ad():
-    advert = ads_collection.find()
-    advert = list(advert)
-    return {"data": list(map(replace_mongo_id, advert))}
-
-# Get single advert by ID (GET): Open to all users
-@ads_router.get("/advert/{ad_id}")
-def get_ad_by_id(ad_id: str):
-    if not ObjectId.is_valid(ad_id):
-        raise HTTPException(status_code=400, detail="Invalid ad ID format")
-    advert = ads_collection.find_one({"_id": ObjectId(ad_id)})
-    if not advert:
-        raise HTTPException(status_code=404, detail="Advert not found")
-    return {"data": replace_mongo_id(advert)}
+    return {
+        "message": "Advert created successfully",
+        "ad_id": str(advert_result.inserted_id),
+    }
 
 # Update an advert (PUT): Restricted to the vendor who owns the advert
 @ads_router.put("/advert/{ad_id}", dependencies=[Depends(has_roles([UserRole.VENDOR]))])
 def put_ad(
     ad_id: str,
     user: Annotated[dict, Depends(authenticated_user)],
-    title: Annotated[str, Form()] = None,
+    title: Annotated[str, Form()] ,
+    price: Annotated[float, Form()] ,
+    category: Annotated[str, Form()],
     description: Annotated[str, Form()] = None,
-    price: Annotated[float, Form()] = None,
-    category: Annotated[str, Form()] = None,
-    flyer: Annotated[UploadFile, File()] = None,
+    flyer: Annotated[bytes, File()] = None,
 ):
     if not ObjectId.is_valid(ad_id):
         raise HTTPException(status_code=400, detail="Invalid ad ID format")
     
-    advert = ads_collection.find_one({"_id": ObjectId(ad_id)})
-    if not advert:
-        raise HTTPException(status_code=404, detail="Advert not found")
-        
-    if advert["owner_id"] != user["id"]:
-        raise HTTPException(status_code=403, detail="You can only update your own adverts")
+    if not flyer:
+        # Generate AI image with Gemini
+        response = genai_client.models.generate_images(
+            model='imagen-4.0-generate-001',
+            prompt=title,
+            config=types.GenerateImagesConfig(
+                number_of_images=1,
+            )
+        )
+        flyer = response.generated_images[0].image.image_bytes
 
-    update_fields = {}
-    if title:
-        update_fields["title"] = title
-    if description:
-        update_fields["description"] = description
-    if price:
-        update_fields["price"] = price
-    if category:
-        update_fields["category"] = category
-    if flyer:
-        upload_result = cloudinary.uploader.upload(flyer.file)
-        update_fields["flyer_url"] = upload_result["secure_url"]
+    upload_result = cloudinary.uploader.upload(flyer)
+    replace_result = ads_collection.replace_one(
+        filter={"_id": ObjectId(ad_id), "owner_id": user["id"]},
+        replacement={
+            "owner_id": user["id"],
+            "title": title,
+            "description": description,
+            "price": price,
+            "category": category,
+            "flyer_url": upload_result["secure_url"],
+        })
+    
+    if not replace_result.modified_count:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="No advert found to replace!")
+    return {"message": f"Advert {ad_id} updated successfully"}
 
-    ads_collection.update_one({"_id": ObjectId(ad_id)}, {"$set": update_fields})
-    return {"message": "Advert updated successfully"}
 
 # Delete an advert (DELETE): Restricted to the vendor who owns the advert
 @ads_router.delete("/advert/{ad_id}", dependencies=[Depends(has_roles([UserRole.VENDOR]))])
@@ -112,55 +189,3 @@ def delete_ad(ad_id: str, user: Annotated[dict, Depends(authenticated_user)]):
         raise HTTPException(status_code=404, detail="Advert not found")
     
     return {"message": "Advert deleted successfully"}
-
-# Search & Filter (GET): Open to all users
-@ads_router.get("/advert")
-def get_filtered_ads(
-    title: str = Query("", description="Filter by title"),
-    description: str = Query("", description="Filter by description"),
-    category: str = Query("", description="Filter by category"),
-    min_price: float = Query(None, description="Filter by minimum price"),
-    max_price: float = Query(None, description="Filter by maximum price"),
-    limit: int = 10,
-    skip: int = 0,
-):
-    query = {}
-    if title:
-        query["title"] = {"$regex": title, "$options": "i"}
-    if description:
-        query["description"] = {"$regex": description, "$options": "i"}
-    if category:
-        query["category"] = {"$regex": category, "$options": "i"}
-
-    price_query = {}
-    if min_price is not None:
-        price_query["$gte"] = min_price
-    if max_price is not None:
-        price_query["$lte"] = max_price
-    if price_query:
-        query["price"] = price_query
-
-    advert = ads_collection.find(query).skip(skip).limit(limit)
-    advert = list(advert)
-    return {"data": list(map(replace_mongo_id, advert))}
-
-
-@ads_router.get("/advert/{ad_id}/related")
-def get_related_ads(ad_id: str):
-    if not ObjectId.is_valid(ad_id):
-        raise HTTPException(status_code=400, detail="Invalid ad ID format")
-    
-    current_ad = ads_collection.find_one({"_id": ObjectId(ad_id)})
-    if not current_ad:
-        raise HTTPException(status_code=404, detail="Advert not found")
-    
-    related_ads = ads_collection.find(
-        {
-            "category": current_ad["category"],
-            "_id": {"$ne": ObjectId(ad_id)}
-        }
-    ).limit(5)
-    
-    related_ads = list(related_ads)
-    
-    return {"data": list(map(replace_mongo_id, related_ads))}

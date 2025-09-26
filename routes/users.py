@@ -23,7 +23,7 @@ def register_user(
     username: Annotated[str, Form()],
     email: Annotated[EmailStr, Form()],
     password: Annotated[str, Form(min_length=8)],
-    role: Annotated[UserRole, Form()] = UserRole.USER,
+    roles: Annotated[UserRole, Form()] = UserRole.USER,
 ):
     # ensure user doesn't exist
     user_count = users_collection.count_documents(filter={"email": email})
@@ -37,7 +37,7 @@ def register_user(
             "usermame": username,
             "email": email,
             "password": hashed_password,
-            "role": role,
+            "roles": roles,
         }
     )
     # return response
@@ -67,4 +67,4 @@ def login_user(
         "HS256",
     )
     # return response
-    return {"message": "User logged in successfully", "access_token": encoded_jwt}
+    return {"message": "User logged in successfully", "access_token": encoded_jwt, "roles": user["roles"]}
