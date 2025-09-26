@@ -26,4 +26,7 @@ def get_home():
     return {"message": "You are on home page"}
 
 
+app.include_router(ads_router)
+app.include_router(users_router)
 app.include_router(genai_router)
+
